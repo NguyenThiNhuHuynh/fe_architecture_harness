@@ -1,0 +1,7 @@
+{% if verification_errors %}
+## Fix these issues from your previous attempt
+
+{% for e in verification_errors %}
+- {{ e }}
+{% endfor %}
+{% endif %}

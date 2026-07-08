@@ -1,0 +1,16 @@
+## Project Brief
+
+{{ ancestors.clarification | pretty_json }}
+
+## Information Architecture
+
+{{ ancestors.information_architecture | pretty_json }}
+
+## Non-Functional Requirements
+
+{{ ancestors.get("requirement", {}).get("non_functional_requirements", []) | pretty_json }}
+
+Produce the Frontend Architecture spec (framework, rendering_strategy,
+routing_strategy, state_management, data_fetching_strategy,
+folder_structure, key_libraries).
+{% include "verification_errors.j2" %}

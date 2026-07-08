@@ -1,0 +1,11 @@
+## Page Plan
+
+{{ ancestors.get("page_planning", {}) | pretty_json }}
+
+## Design System Base Components
+
+{{ ancestors.get("design_system", {}).get("base_components", []) | pretty_json }}
+
+Produce the Component Plan (components with props, used_in_pages,
+depends_on_components).
+{% include "verification_errors.j2" %}

@@ -1,0 +1,22 @@
+## Project
+
+{{ ancestors.get("clarification", {}).get("project_name", "") }}
+
+## Frontend Architecture
+
+{{ ancestors.get("frontend_architecture", {}) | pretty_json }}
+
+## Design System
+
+{{ ancestors.get("design_system", {}) | pretty_json }}
+
+## Component Plan
+
+{{ ancestors.get("component_planning", {}) | pretty_json }}
+
+## Page Plan
+
+{{ ancestors.get("page_planning", {}) | pretty_json }}
+
+Generate the full set of source files implementing this plan.
+{% include "verification_errors.j2" %}

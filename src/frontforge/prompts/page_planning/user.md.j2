@@ -1,0 +1,14 @@
+## Information Architecture
+
+{{ ancestors.get("information_architecture", {}) | pretty_json }}
+
+## Frontend Architecture
+
+{{ ancestors.get("frontend_architecture", {}) | pretty_json }}
+
+## Roles
+
+{{ ancestors.get("requirement", {}).get("roles", []) | pretty_json }}
+
+Produce the Page Plan (one PageSpec per sitemap route).
+{% include "verification_errors.j2" %}

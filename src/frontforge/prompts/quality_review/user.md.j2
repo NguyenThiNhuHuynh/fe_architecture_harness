@@ -1,0 +1,15 @@
+## Preview Findings
+
+{{ ancestors.get("preview", {}) | pretty_json }}
+
+## Component Plan
+
+{{ ancestors.get("component_planning", {}) | pretty_json }}
+
+## Requirement Specification
+
+{{ ancestors.get("requirement", {}) | pretty_json }}
+
+Produce the final QualityReviewResult (score, passed, issues,
+recommendations).
+{% include "verification_errors.j2" %}

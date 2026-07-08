@@ -1,0 +1,8 @@
+raw_requirement: |
+  Tôi muốn xây dựng website tuyển dụng có AI. Website cần có 3 vai trò:
+  Candidate (ứng viên), HR (nhà tuyển dụng), và Admin. Ứng viên có thể tạo
+  hồ sơ, tìm việc, ứng tuyển, theo dõi trạng thái đơn ứng tuyển. HR có thể
+  đăng tin tuyển dụng, xem danh sách ứng viên, lên lịch phỏng vấn. Hệ thống
+  nên có tính năng AI để gợi ý công việc phù hợp cho ứng viên dựa trên hồ sơ
+  của họ. Ưu tiên dùng Next.js và Tailwind CSS, hỗ trợ responsive và dark
+  mode.

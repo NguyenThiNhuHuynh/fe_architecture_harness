@@ -1,0 +1,26 @@
+## Page Plan
+
+{{ ancestors.get("page_planning", {}) | pretty_json }}
+
+## Generated Files
+
+Each file below is shown up to 800 characters. A file marked `[FULL FILE -
+nothing omitted]` is complete as shown; do NOT report it as truncated,
+incomplete, or missing content past what's displayed. Only a file marked
+`[PREVIEW TRUNCATED - N of M chars shown]` has content you cannot see -
+for those, do not assert anything about what comes after the cutoff.
+
+{% for f in ancestors.get("codegen", {}).get("files", []) %}
+### {{ f.path }}
+{% if f.content|length <= 800 %}
+[FULL FILE - nothing omitted]
+{% else %}
+[PREVIEW TRUNCATED - 800 of {{ f.content|length }} chars shown]
+{% endif %}
+```
+{{ f.content[:800] }}
+```
+{% endfor %}
+
+Review this output and produce PreviewResult (notes, issues_found).
+{% include "verification_errors.j2" %}

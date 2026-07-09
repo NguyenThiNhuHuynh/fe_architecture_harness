@@ -73,6 +73,27 @@ async def test_downstream_stages_never_run_after_upstream_failure(session):
 
 
 @pytest.mark.asyncio
+async def test_failed_stage_is_retried_on_a_fresh_run_all_call(session):
+    """Simulates hitting a usage limit mid-pipeline: a stage FAILs and the
+    process exits. A later `frontforge run` (a brand new Orchestrator/run_all
+    call, e.g. after the quota resets) must still retry that stage instead of
+    treating a persisted FAILED status as permanently stuck."""
+    from fixtures_data import ScriptedProvider
+
+    write_json(session.seed_file, {"raw_requirement": "Build something."})
+
+    failing_provider = ScriptedProvider({"ProjectBrief": {"project_name": "Demo"}})  # invalid
+    first_run = Orchestrator(session, failing_provider, max_retries=0)
+    states = await first_run.run_all(only="clarification")
+    assert states["clarification"].status == StageStatus.FAILED
+
+    # Fresh process/orchestrator instance, provider now works again.
+    second_run = Orchestrator(session, ScriptedProvider(), max_retries=0)
+    states = await second_run.run_all(only="clarification")
+    assert states["clarification"].status == StageStatus.DONE
+
+
+@pytest.mark.asyncio
 async def test_mark_dirty_forces_rerun(session, scripted_provider):
     write_json(session.seed_file, {"raw_requirement": "Build a recruitment site."})
     orchestrator = Orchestrator(session, scripted_provider)

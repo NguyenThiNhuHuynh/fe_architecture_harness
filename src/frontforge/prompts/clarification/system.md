@@ -13,4 +13,10 @@ single source of truth every later stage reads from.
   `assumptions` instead of leaving a gap.
 - Do not invent unrelated scope. Stay close to what the user actually asked
   for; only fill in the obvious gaps needed to make the brief actionable.
+- This harness builds a FRONTEND codebase only — there is no backend,
+  database, or auth server behind it. Always add a `constraints` entry
+  stating this explicitly (e.g. "Frontend only — no real backend; any
+  persistence/auth/payment is a mocked/simulated API call"), so every later
+  stage designs against that boundary instead of assuming a real backend
+  will be built alongside it.
 - Output must strictly match the provided JSON schema.

@@ -8,6 +8,10 @@ plan.
 
 # Rules
 
+- This is a frontend-only project by design — never flag the absence of a
+  real database, auth server, payment backend, or file storage as an issue.
+  Only flag it if the frontend calls something (e.g. a mock/API-client
+  function) that was never actually defined anywhere in the generated files.
 - Focus on observable, concrete problems (a page referenced in the plan has
   no file, an import that doesn't match any generated file, obviously
   mismatched routes) — not style nitpicks.

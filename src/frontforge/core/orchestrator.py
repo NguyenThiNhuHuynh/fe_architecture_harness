@@ -135,6 +135,12 @@ class Orchestrator:
         # already holds it; self-heals if the previous holder is dead.
         lock = RunLock(self.session.run_lock_file)
         lock.acquire()
+        # Tracks stages that failed *within this run_all() call* so we don't
+        # re-select the same failed stage forever in the loop below. This is
+        # deliberately NOT based on persisted status: a stage FAILED from a
+        # previous run (e.g. hit a usage/rate limit) must still be eligible
+        # for a fresh attempt the next time `frontforge run` is invoked.
+        failed_this_call: set[str] = set()
         try:
             target_ids = self._resolve_targets(only=only, to=to)
 
@@ -148,11 +154,14 @@ class Orchestrator:
                 ready = [
                     sid
                     for sid in self.registry.ready_stages(done_ids)
-                    if sid in remaining and self.state.get(sid).status != StageStatus.FAILED
+                    if sid in remaining and sid not in failed_this_call
                 ]
                 if not ready:
                     break  # remaining stages are blocked by a failed/incomplete dependency
-                await asyncio.gather(*(self.run_stage(sid) for sid in ready))
+                results = await asyncio.gather(*(self.run_stage(sid) for sid in ready))
+                for stage_id, result in zip(ready, results):
+                    if result.status == StageStatus.FAILED:
+                        failed_this_call.add(stage_id)
 
             return self.state.all()
         finally:

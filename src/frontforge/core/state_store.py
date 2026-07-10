@@ -48,6 +48,8 @@ class StateStore:
         input_hash: str | None = None,
         error: str | None = None,
         bump_attempts: bool = False,
+        duration_ms: int | None = None,
+        cost_usd: float | None = None,
     ) -> StageState:
         current = self.get(stage_id)
         attempts = current.attempts + 1 if bump_attempts else current.attempts
@@ -58,6 +60,8 @@ class StateStore:
             updated_at=datetime.now(timezone.utc),
             attempts=attempts,
             error=error,
+            duration_ms=duration_ms if duration_ms is not None else current.duration_ms,
+            cost_usd=cost_usd if cost_usd is not None else current.cost_usd,
         )
         self._states[stage_id] = new_state
         self._persist()

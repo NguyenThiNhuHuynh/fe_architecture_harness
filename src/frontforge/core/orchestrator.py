@@ -6,13 +6,16 @@ retries and dirty propagation — it has no idea what "codegen" or
 from __future__ import annotations
 
 import asyncio
+import time
+import uuid
 from typing import Any
 
 from frontforge.config.models import model_for_stage
 from frontforge.config.stages import StageRegistry
 from frontforge.config.verification import build_stage_verifiers
+from frontforge.core.human_review import HumanReviewHook
 from frontforge.core.lock import RunLock
-from frontforge.core.logger import get_logger
+from frontforge.core.logger import EventLogger, get_logger
 from frontforge.core.session import RunSession
 from frontforge.core.state_store import StateStore
 from frontforge.core.verification.engine import VerificationEngine
@@ -24,6 +27,8 @@ from frontforge.tools.filesystem_tool import FilesystemTool
 
 
 class Orchestrator:
+    MAX_HUMAN_REVISIONS = 3
+
     def __init__(
         self,
         session: RunSession,
@@ -34,6 +39,8 @@ class Orchestrator:
         verification_engine: VerificationEngine | None = None,
         filesystem_tool: FilesystemTool | None = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        run_id: str | None = None,
+        human_review: HumanReviewHook | None = None,
     ):
         self.session = session
         self.provider = provider
@@ -43,6 +50,27 @@ class Orchestrator:
         self.filesystem = filesystem_tool or FilesystemTool(session.generated_dir)
         self.max_retries = max_retries
         self.logger = get_logger()
+        self.run_id = run_id or uuid.uuid4().hex[:8]
+        self.events = EventLogger(session.logs_dir, self.run_id)
+        # None = fully unattended (no pauses at all) — distinct from
+        # HumanReviewHook() the no-op default, which still *asks* but always
+        # gets "proceed"/"no auto-fix". Orchestrator only calls these hooks
+        # when one is actually supplied, so existing unattended callers
+        # (tests, `--only`/`--to` scripting) are unaffected.
+        self.human_review = human_review
+        # Feedback queued for a stage's *next* attempt — either from a human
+        # rejecting a stage's output (feedback text) or from quality_review's
+        # issues after an auto-fix approval. Seeded into that stage's first
+        # verification_errors so it flows through the exact same prompt
+        # channel as a normal retry, no new plumbing needed.
+        self._pending_feedback: dict[str, list[str]] = {}
+        self._paused = False
+        # Safety cap on how many times a stage can be re-triggered via HITL
+        # feedback/auto-fix *within one run_all() call*. Without this, a
+        # human (or a script) that keeps answering "yes, fix it" to an issue
+        # the model can never actually resolve — exactly the false-positive
+        # quality_review case seen in testing — would loop forever.
+        self._autofix_rounds: dict[str, int] = {}
 
     # -- context assembly -------------------------------------------------
 
@@ -72,9 +100,15 @@ class Orchestrator:
         input_hash = content_hash({"seed": seed, "ancestors": ancestors})
         model = model_for_stage(stage_id)
 
+        stage_start = time.monotonic()
         self.state.update(stage_id, status=StageStatus.RUNNING, input_hash=input_hash)
-        verification_errors: list[str] = []
+        self.events.log("stage_started", stage_id=stage_id, model=model)
+        # Seed with any feedback queued for this stage (human rejected its
+        # previous output, or quality_review issues approved for auto-fix) —
+        # rides the same "errors from last time" prompt channel as a retry.
+        verification_errors: list[str] = self._pending_feedback.pop(stage_id, [])
         last_error: str | None = None
+        total_cost_usd = 0.0
 
         for attempt in range(self.max_retries + 1):
             try:
@@ -89,7 +123,12 @@ class Orchestrator:
                 last_error = str(exc)
                 verification_errors = [f"agent/provider error: {exc}"]
                 self.logger.warning("stage %s attempt %d raised: %s", stage_id, attempt + 1, exc)
+                self.events.log(
+                    "stage_attempt_error", stage_id=stage_id, attempt=attempt + 1, error=str(exc)
+                )
                 continue
+
+            total_cost_usd += agent_result.provider_result.cost_usd or 0.0
 
             result = await self.verification.run(stage_id, agent_result.output, self.session)
             if result.passed:
@@ -97,8 +136,30 @@ class Orchestrator:
                 if stage_id == "codegen" and isinstance(mapped, CodegenResult):
                     self.filesystem.write_files(mapped.files)
                 self.state.save_output(stage_id, mapped.model_dump(mode="json"))
+                duration_ms = int((time.monotonic() - stage_start) * 1000)
+                self.logger.info(
+                    "stage %s DONE in %dms (cost=$%.4f, model=%s, attempts=%d)",
+                    stage_id,
+                    duration_ms,
+                    total_cost_usd,
+                    model,
+                    attempt + 1,
+                )
+                self.events.log(
+                    "stage_done",
+                    stage_id=stage_id,
+                    duration_ms=duration_ms,
+                    cost_usd=round(total_cost_usd, 6),
+                    model=model,
+                    attempts=attempt + 1,
+                )
                 return self.state.update(
-                    stage_id, status=StageStatus.DONE, input_hash=input_hash, bump_attempts=True
+                    stage_id,
+                    status=StageStatus.DONE,
+                    input_hash=input_hash,
+                    bump_attempts=True,
+                    duration_ms=duration_ms,
+                    cost_usd=total_cost_usd,
                 )
 
             verification_errors = [
@@ -108,13 +169,36 @@ class Orchestrator:
             self.logger.warning(
                 "stage %s attempt %d failed verification: %s", stage_id, attempt + 1, last_error
             )
+            self.events.log(
+                "stage_attempt_verification_failed",
+                stage_id=stage_id,
+                attempt=attempt + 1,
+                errors=verification_errors,
+            )
 
+        duration_ms = int((time.monotonic() - stage_start) * 1000)
+        self.logger.warning(
+            "stage %s FAILED after %d attempt(s) in %dms (cost=$%.4f)",
+            stage_id,
+            self.max_retries + 1,
+            duration_ms,
+            total_cost_usd,
+        )
+        self.events.log(
+            "stage_failed",
+            stage_id=stage_id,
+            duration_ms=duration_ms,
+            cost_usd=round(total_cost_usd, 6),
+            error=last_error,
+        )
         return self.state.update(
             stage_id,
             status=StageStatus.FAILED,
             input_hash=input_hash,
             error=last_error,
             bump_attempts=True,
+            duration_ms=duration_ms,
+            cost_usd=total_cost_usd,
         )
 
     # -- DAG execution -----------------------------------------------------
@@ -141,6 +225,8 @@ class Orchestrator:
         # previous run (e.g. hit a usage/rate limit) must still be eligible
         # for a fresh attempt the next time `frontforge run` is invoked.
         failed_this_call: set[str] = set()
+        self._paused = False
+        self._autofix_rounds = {}
         try:
             target_ids = self._resolve_targets(only=only, to=to)
 
@@ -162,10 +248,56 @@ class Orchestrator:
                 for stage_id, result in zip(ready, results):
                     if result.status == StageStatus.FAILED:
                         failed_this_call.add(stage_id)
+                    elif result.status == StageStatus.DONE:
+                        await self._run_human_review(stage_id)
+
+                if self._paused:
+                    break  # human chose to stop for manual editing
 
             return self.state.all()
         finally:
             lock.release()
+
+    async def _run_human_review(self, stage_id: str) -> None:
+        """The 2 HITL checkpoints: every DONE stage except quality_review
+        asks "keep going?"; quality_review asks "auto-fix from these
+        issues?". No-op entirely when no hook was supplied."""
+        if self.human_review is None:
+            return
+
+        if stage_id == "quality_review":
+            if self._autofix_rounds.get("codegen", 0) >= self.MAX_HUMAN_REVISIONS:
+                self.logger.warning(
+                    "codegen already auto-fixed %d time(s) this run; not asking again",
+                    self.MAX_HUMAN_REVISIONS,
+                )
+                return
+            output = self.state.load_output(stage_id) or {}
+            issues = output.get("issues", [])
+            if await self.human_review.review_quality(issues):
+                self._pending_feedback["codegen"] = [
+                    f"[quality_review:{issue.get('severity', '?')}] {issue.get('description', '')}"
+                    for issue in issues
+                ]
+                self._autofix_rounds["codegen"] = self._autofix_rounds.get("codegen", 0) + 1
+                self.mark_dirty("codegen")
+            return
+
+        if self._autofix_rounds.get(stage_id, 0) >= self.MAX_HUMAN_REVISIONS:
+            self.logger.warning(
+                "stage %s already revised %d time(s) this run; not asking again",
+                stage_id,
+                self.MAX_HUMAN_REVISIONS,
+            )
+            return
+        output = self.state.load_output(stage_id) or {}
+        decision = await self.human_review.review_stage(stage_id, output)
+        if decision.stop_for_manual_edit:
+            self._paused = True
+        elif decision.feedback:
+            self._pending_feedback[stage_id] = [decision.feedback]
+            self._autofix_rounds[stage_id] = self._autofix_rounds.get(stage_id, 0) + 1
+            self.mark_dirty(stage_id)
 
     def mark_dirty(self, stage_id: str) -> list[str]:
         return self.state.mark_dirty_cascade(stage_id, self.registry.dependents_of)

@@ -119,5 +119,5 @@ class ScriptedProvider(Provider):
         else:
             data = value
         return ProviderResult(
-            raw_text=json.dumps(data), data=data, model=model or "mock", duration_ms=1, cost_usd=0.0
+            raw_text=json.dumps(data), data=data, model=model or "mock", duration_ms=1, cost_usd=0.02
         )

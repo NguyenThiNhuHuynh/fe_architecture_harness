@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from frontforge.config.stages import StageRegistry
+from frontforge.core.human_review import CliHumanReviewHook
 from frontforge.core.lock import RunLockError
 from frontforge.core.logger import configure_logging
 from frontforge.core.orchestrator import Orchestrator
@@ -58,6 +59,15 @@ def run(
     to: str = typer.Option(None, "--to", help="Run every stage needed to reach this one."),
     claude_bin: str = typer.Option("claude", help="Path to the claude CLI binary."),
     max_retries: int = typer.Option(2, help="Max retries per stage on verification failure."),
+    review: bool = typer.Option(
+        False,
+        "--review/--no-review",
+        help=(
+            "Pause after every stage (except quality_review) to confirm/reject/give "
+            "feedback, and after quality_review to approve an auto-fix pass. Off by "
+            "default so unattended runs behave exactly as before."
+        ),
+    ),
 ):
     """Run the pipeline (or a subset of it) via the DAG orchestrator."""
     session = RunSession.at(project)
@@ -66,7 +76,10 @@ def run(
     configure_logging(session.logs_dir, run_id)
 
     provider = ClaudeCliProvider(claude_bin=claude_bin)
-    orchestrator = Orchestrator(session, provider, max_retries=max_retries)
+    human_review = CliHumanReviewHook() if review else None
+    orchestrator = Orchestrator(
+        session, provider, max_retries=max_retries, run_id=run_id, human_review=human_review
+    )
 
     console.print(f"[bold]Running pipeline[/bold] for {project} (run {run_id})")
     try:
@@ -75,6 +88,8 @@ def run(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
     _print_status_table(states)
+    _print_summary(states)
+    _notify_completion(states)
 
 
 @app.command()
@@ -127,6 +142,8 @@ def _print_status_table(states: dict) -> None:
     table.add_column("Stage")
     table.add_column("Status")
     table.add_column("Attempts")
+    table.add_column("Duration")
+    table.add_column("Cost")
     table.add_column("Updated at")
     table.add_column("Error")
 
@@ -134,10 +151,12 @@ def _print_status_table(states: dict) -> None:
     for stage_id in registry.all_ids():
         state = states.get(stage_id)
         if state is None:
-            status_text, attempts, updated_at, error = "pending", "0", "", ""
+            status_text, attempts, duration, cost, updated_at, error = "pending", "0", "", "", "", ""
         else:
             status_text = state.status.value if hasattr(state.status, "value") else state.status
             attempts = str(state.attempts)
+            duration = _format_duration(state.duration_ms)
+            cost = _format_cost(state.cost_usd)
             updated_at = str(state.updated_at) if state.updated_at else ""
             error = state.error or ""
         color = {
@@ -146,9 +165,56 @@ def _print_status_table(states: dict) -> None:
             StageStatus.DIRTY.value: "yellow",
             StageStatus.RUNNING.value: "cyan",
         }.get(status_text, "white")
-        table.add_row(stage_id, f"[{color}]{status_text}[/{color}]", attempts, updated_at, error)
+        table.add_row(
+            stage_id, f"[{color}]{status_text}[/{color}]", attempts, duration, cost, updated_at, error
+        )
 
     console.print(table)
+
+
+def _format_duration(duration_ms: int | None) -> str:
+    if duration_ms is None:
+        return ""
+    return f"{duration_ms / 1000:.1f}s"
+
+
+def _format_cost(cost_usd: float | None) -> str:
+    if cost_usd is None:
+        return ""
+    return f"${cost_usd:.4f}"
+
+
+def _print_summary(states: dict) -> None:
+    """Total time/cost across the run just performed, plus the most
+    expensive and slowest stage — the numbers ProviderResult.cost_usd
+    already carried but nothing used to surface."""
+    known = [s for s in states.values() if s.duration_ms is not None or s.cost_usd is not None]
+    if not known:
+        return
+
+    total_duration_ms = sum(s.duration_ms or 0 for s in known)
+    total_cost = sum(s.cost_usd or 0.0 for s in known)
+    slowest = max(known, key=lambda s: s.duration_ms or 0)
+    priciest = max(known, key=lambda s: s.cost_usd or 0.0)
+
+    table = Table(title="Run summary")
+    table.add_column("Metric")
+    table.add_column("Value")
+    table.add_row("Total duration", _format_duration(total_duration_ms))
+    table.add_row("Total cost", _format_cost(total_cost))
+    table.add_row("Slowest stage", f"{slowest.stage_id} ({_format_duration(slowest.duration_ms)})")
+    table.add_row("Most expensive stage", f"{priciest.stage_id} ({_format_cost(priciest.cost_usd)})")
+    console.print(table)
+
+
+def _notify_completion(states: dict) -> None:
+    """Pipelines run unattended for 20-40+ minutes — a visible banner (and a
+    terminal bell) matters since nobody may be watching the console."""
+    failed = [sid for sid, s in states.items() if s.status == StageStatus.FAILED]
+    if failed:
+        console.print(f"\a[bold red]Pipeline finished with failures:[/bold red] {', '.join(failed)}")
+    else:
+        console.print("\a[bold green]Pipeline finished — all requested stages are DONE.[/bold green]")
 
 
 if __name__ == "__main__":

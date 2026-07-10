@@ -34,6 +34,8 @@ class StageState(BaseModel):
     updated_at: datetime | None = None
     attempts: int = 0
     error: str | None = None
+    duration_ms: int | None = None
+    cost_usd: float | None = None
 
 
 class ProviderResult(BaseModel):

@@ -22,6 +22,17 @@ async def test_full_pipeline_runs_to_done_with_valid_outputs(session, scripted_p
     # run_all() must always release the lock, success or failure
     assert not session.run_lock_file.exists()
 
+    # Observability: every DONE stage records duration/cost, and the
+    # structured event log has a "stage_done" line for each of them.
+    for stage_id, state in states.items():
+        assert state.duration_ms is not None and state.duration_ms >= 0
+        assert state.cost_usd == pytest.approx(0.02)
+
+    events_files = list(session.logs_dir.glob("events-*.jsonl"))
+    assert len(events_files) == 1
+    events_text = events_files[0].read_text(encoding="utf-8")
+    assert events_text.count('"event": "stage_done"') == len(states)
+
 
 @pytest.mark.asyncio
 async def test_run_all_refuses_to_start_while_another_process_holds_the_lock(
@@ -56,6 +67,11 @@ async def test_stage_retries_then_fails_on_persistent_bad_output(session):
     # before the stage is finally marked failed for this one run_all() call.
     assert len(provider.calls) == 2
     assert states["clarification"].attempts == 1
+
+    # A FAILED stage still records duration/cost — cost isn't only tracked
+    # on the happy path, since the failing calls still cost real money.
+    assert states["clarification"].duration_ms is not None
+    assert states["clarification"].cost_usd == pytest.approx(0.02 * 2)
 
 
 @pytest.mark.asyncio

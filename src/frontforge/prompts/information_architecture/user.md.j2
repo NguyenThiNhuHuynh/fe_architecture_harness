@@ -6,5 +6,9 @@
 
 {{ ancestors.requirement | pretty_json }}
 
+## Design Analysis (from Figma, if any)
+
+{{ ancestors.get("design_analysis", {}) | pretty_json }}
+
 Produce the Information Architecture (sitemap, navigation, content_types).
 {% include "verification_errors.j2" %}

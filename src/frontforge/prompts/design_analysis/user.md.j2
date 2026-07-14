@@ -1,0 +1,19 @@
+{% if seed.get("figma_design_data") %}
+## Figma pages / top-level frames
+
+{{ seed.figma_design_data.pages | pretty_json }}
+
+## Figma published styles
+
+{{ seed.figma_design_data.styles | pretty_json }}
+
+## Figma published components
+
+{{ seed.figma_design_data.components | pretty_json }}
+
+Interpret the above into a DesignAnalysisResult with source="figma".
+{% else %}
+No Figma source was provided for this project. Return a DesignAnalysisResult
+with source="none" and every list empty.
+{% endif %}
+{% include "verification_errors.j2" %}

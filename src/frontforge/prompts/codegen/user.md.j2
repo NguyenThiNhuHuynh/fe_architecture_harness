@@ -10,6 +10,22 @@
 
 {{ ancestors.get("design_system", {}) | pretty_json }}
 
+{% if seed.get("_codegen_batch") %}
+## This call: batch {{ seed._codegen_batch.batch_number }} of {{ seed._codegen_batch.total_batches }} — "{{ seed._codegen_batch.label }}"
+
+### Pages in THIS batch only
+{{ seed._codegen_batch.pages | pretty_json }}
+
+### Components in THIS batch only
+{{ seed._codegen_batch.components | pretty_json }}
+
+### Files already generated in earlier batches (exist, importable, do not recreate)
+{{ seed._codegen_batch.already_generated_paths | pretty_json }}
+
+Generate ONLY the files for this batch's pages/components (plus shared
+setup files like package.json/config, only if this is the "foundation"
+batch).
+{% else %}
 ## Component Plan
 
 {{ ancestors.get("component_planning", {}) | pretty_json }}
@@ -19,4 +35,5 @@
 {{ ancestors.get("page_planning", {}) | pretty_json }}
 
 Generate the full set of source files implementing this plan.
+{% endif %}
 {% include "verification_errors.j2" %}

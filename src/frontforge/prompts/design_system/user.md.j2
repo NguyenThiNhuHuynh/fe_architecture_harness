@@ -6,6 +6,10 @@
 
 {{ ancestors.requirement | pretty_json }}
 
+## Design Analysis (from Figma, if any)
+
+{{ ancestors.get("design_analysis", {}) | pretty_json }}
+
 Produce the Design System spec (design_principles, color_tokens,
 typography, spacing_scale, base_components, themes).
 {% include "verification_errors.j2" %}

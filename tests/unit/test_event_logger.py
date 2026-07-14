@@ -1,6 +1,7 @@
 import json
 
 from frontforge.core.logger import EventLogger
+from frontforge.core.tracing import get_tracer
 
 
 def test_event_logger_writes_one_json_line_per_call(tmp_path):
@@ -32,3 +33,27 @@ def test_event_logger_creates_logs_dir_if_missing(tmp_path):
 
     EventLogger(logs_dir, "run1")
     assert logs_dir.exists()
+
+
+def test_log_called_inside_a_span_carries_that_spans_trace_and_span_id(tmp_path, otel_spans):
+    events = EventLogger(tmp_path, "run1")
+    tracer = get_tracer("test")
+
+    with tracer.start_as_current_span("test.span") as span:
+        events.log("something_happened")
+        expected_trace_id = format(span.get_span_context().trace_id, "032x")
+        expected_span_id = format(span.get_span_context().span_id, "016x")
+
+    record = json.loads((tmp_path / "events-run1.jsonl").read_text(encoding="utf-8").strip())
+    assert record["trace_id"] == expected_trace_id
+    assert record["span_id"] == expected_span_id
+
+
+def test_log_called_outside_any_span_omits_trace_and_span_id(tmp_path):
+    events = EventLogger(tmp_path, "run2")
+
+    events.log("something_happened")
+
+    record = json.loads((tmp_path / "events-run2.jsonl").read_text(encoding="utf-8").strip())
+    assert "trace_id" not in record
+    assert "span_id" not in record

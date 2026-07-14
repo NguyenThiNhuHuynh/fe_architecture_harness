@@ -25,6 +25,14 @@ VALID_OUTPUTS: dict[str, dict[str, Any]] = {
         "features": [{"name": "Home", "description": "Home page", "priority": "must"}],
         "assumptions": [],
     },
+    "design_analysis": {
+        "source": "none",
+        "pages": [],
+        "color_tokens": [],
+        "typography": [],
+        "components": [],
+        "notes": [],
+    },
     "business_analysis": {
         "personas": [{"name": "Alice", "role": "User", "goals": ["browse"], "pain_points": []}],
         "user_journeys": [{"name": "Browse", "persona": "Alice", "steps": ["Visit home"]}],

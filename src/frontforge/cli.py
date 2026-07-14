@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from pathlib import Path
 
@@ -16,10 +17,12 @@ from frontforge.core.human_review import CliHumanReviewHook
 from frontforge.core.lock import RunLockError
 from frontforge.core.logger import configure_logging
 from frontforge.core.orchestrator import Orchestrator
+from frontforge.core.tracing import configure_metrics, configure_tracing, shutdown_metrics
 from frontforge.core.session import RunSession
 from frontforge.providers.claude_cli import ClaudeCliProvider
 from frontforge.shared.types import StageStatus
 from frontforge.shared.utils import write_json
+from frontforge.tools.figma_tool import extract_file_key
 
 app = typer.Typer(help="FrontForge — AI UI-Architecture Harness (DAG-orchestrated agents).")
 stage_app = typer.Typer(help="Inspect or act on a single stage.")
@@ -35,6 +38,14 @@ def init(
     from_file: Path = typer.Option(
         None, "--from-file", "-f", help="YAML file with a `raw_requirement` key."
     ),
+    figma_url: str = typer.Option(
+        None,
+        "--figma-url",
+        help=(
+            "Optional Figma file URL — the design_analysis stage will fetch its "
+            "pages/styles/components (needs FIGMA_ACCESS_TOKEN set in the environment)."
+        ),
+    ),
 ):
     """Scaffold .harness/ and seed the pipeline with the raw user requirement."""
     session = RunSession.at(project)
@@ -43,12 +54,26 @@ def init(
     if from_file is not None:
         data = yaml.safe_load(from_file.read_text(encoding="utf-8"))
         raw_requirement = data["raw_requirement"]
+        figma_url = figma_url or data.get("figma_url")
     elif requirement is not None:
         raw_requirement = requirement
     else:
         raw_requirement = typer.prompt("Describe what you want to build")
 
-    write_json(session.seed_file, {"raw_requirement": raw_requirement})
+    seed = {"raw_requirement": raw_requirement}
+    if figma_url:
+        try:
+            extract_file_key(figma_url)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--figma-url") from exc
+        if not os.environ.get("FIGMA_ACCESS_TOKEN"):
+            console.print(
+                "[yellow]Warning:[/yellow] --figma-url was given but FIGMA_ACCESS_TOKEN is not "
+                "set in this environment — export it before `frontforge run`, or the "
+                "design_analysis stage will fail."
+            )
+        seed["figma_url"] = figma_url
+    write_json(session.seed_file, seed)
     console.print(f"[green]Initialized[/green] project workspace at {session.harness_dir}")
 
 
@@ -68,17 +93,34 @@ def run(
             "default so unattended runs behave exactly as before."
         ),
     ),
+    max_budget_usd: float = typer.Option(
+        None,
+        "--max-budget-usd",
+        help="Per-call spending cap passed straight to `claude -p --max-budget-usd`.",
+    ),
+    max_total_cost_usd: float = typer.Option(
+        None,
+        "--max-total-cost-usd",
+        help="Pipeline-wide spending cap — stop starting new stages once cumulative cost crosses this.",
+    ),
 ):
     """Run the pipeline (or a subset of it) via the DAG orchestrator."""
     session = RunSession.at(project)
     session.scaffold()
     run_id = uuid.uuid4().hex[:8]
     configure_logging(session.logs_dir, run_id)
+    configure_tracing(session.logs_dir, run_id)
+    configure_metrics(session.logs_dir, run_id)
 
-    provider = ClaudeCliProvider(claude_bin=claude_bin)
+    provider = ClaudeCliProvider(claude_bin=claude_bin, max_budget_usd=max_budget_usd)
     human_review = CliHumanReviewHook() if review else None
     orchestrator = Orchestrator(
-        session, provider, max_retries=max_retries, run_id=run_id, human_review=human_review
+        session,
+        provider,
+        max_retries=max_retries,
+        run_id=run_id,
+        human_review=human_review,
+        max_total_cost_usd=max_total_cost_usd,
     )
 
     console.print(f"[bold]Running pipeline[/bold] for {project} (run {run_id})")
@@ -87,6 +129,11 @@ def run(
     except RunLockError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
+    finally:
+        # Metrics are periodically exported (default every 5s) — without an
+        # explicit flush here, a short pipeline run could exit before the
+        # last batch is ever exported.
+        shutdown_metrics()
     _print_status_table(states)
     _print_summary(states)
     _notify_completion(states)
@@ -118,6 +165,59 @@ def reset(
     state_store = StateStore(session)
     affected = state_store.mark_dirty_cascade(stage, registry.dependents_of)
     console.print(f"Marked dirty: {', '.join(affected)}")
+
+
+@app.command()
+def stats(project: Path = typer.Argument(..., help="Project workspace directory.")):
+    """Cross-run stats from every events-*.jsonl log: per-stage success rate,
+    duration percentiles (p50/p95/p99), total cost, verification-failure,
+    mark_dirty and HITL-ask counts — folded across all past runs, not just
+    the most recent one."""
+    session = RunSession.at(project)
+    from frontforge.core.stats import compute_stage_stats, read_all_events
+
+    events = read_all_events(session.logs_dir)
+    if not events:
+        console.print("[yellow]No event logs found yet — run `frontforge run` first.[/yellow]")
+        raise typer.Exit(code=1)
+
+    per_stage = compute_stage_stats(events)
+    run_count = len(list(session.logs_dir.glob("events-*.jsonl")))
+
+    table = Table(title=f"Cross-run stats ({run_count} run log(s))")
+    table.add_column("Stage")
+    table.add_column("Runs")
+    table.add_column("Success rate")
+    table.add_column("p50")
+    table.add_column("p95")
+    table.add_column("p99")
+    table.add_column("Total cost")
+    table.add_column("Verify fails")
+    table.add_column("mark_dirty")
+    table.add_column("HITL asks")
+
+    registry = StageRegistry()
+    for stage_id in registry.all_ids():
+        s = per_stage.get(stage_id)
+        if s is None:
+            continue
+        success_rate = f"{s.success_rate * 100:.0f}%" if s.success_rate is not None else ""
+        table.add_row(
+            stage_id,
+            str(s.total_runs),
+            success_rate,
+            _format_duration(s.percentile(50)),
+            _format_duration(s.percentile(95)),
+            _format_duration(s.percentile(99)),
+            _format_cost(s.total_cost_usd),
+            str(s.verification_failures),
+            str(s.mark_dirty_count),
+            str(s.hitl_decisions),
+        )
+    console.print(table)
+
+    total_cost = sum(s.total_cost_usd for s in per_stage.values())
+    console.print(f"[bold]Total cost across all runs:[/bold] {_format_cost(total_cost)}")
 
 
 @stage_app.command("show")

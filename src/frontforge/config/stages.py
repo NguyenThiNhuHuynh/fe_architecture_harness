@@ -11,6 +11,7 @@ from frontforge.agents.business_analysis.agent import BusinessAnalysisAgent
 from frontforge.agents.clarification.agent import ClarificationAgent
 from frontforge.agents.codegen.agent import CodegenAgent
 from frontforge.agents.component_planning.agent import ComponentPlanningAgent
+from frontforge.agents.design_analysis.agent import DesignAnalysisAgent
 from frontforge.agents.design_system.agent import DesignSystemAgent
 from frontforge.agents.frontend_architecture.agent import FrontendArchitectureAgent
 from frontforge.agents.information_architecture.agent import InformationArchitectureAgent
@@ -30,9 +31,14 @@ class StageDefinition:
 STAGES: list[StageDefinition] = [
     StageDefinition("clarification", ClarificationAgent, ()),
     StageDefinition("requirement", RequirementAgent, ("clarification",)),
+    StageDefinition("design_analysis", DesignAnalysisAgent, ("clarification",)),
     StageDefinition("business_analysis", BusinessAnalysisAgent, ("requirement",)),
-    StageDefinition("design_system", DesignSystemAgent, ("requirement",)),
-    StageDefinition("information_architecture", InformationArchitectureAgent, ("business_analysis",)),
+    StageDefinition("design_system", DesignSystemAgent, ("requirement", "design_analysis")),
+    StageDefinition(
+        "information_architecture",
+        InformationArchitectureAgent,
+        ("business_analysis", "design_analysis"),
+    ),
     StageDefinition("frontend_architecture", FrontendArchitectureAgent, ("information_architecture",)),
     StageDefinition("page_planning", PagePlanningAgent, ("frontend_architecture",)),
     StageDefinition("component_planning", ComponentPlanningAgent, ("page_planning",)),

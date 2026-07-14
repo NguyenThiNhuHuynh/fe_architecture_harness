@@ -10,6 +10,7 @@ from frontforge.shared.constants import DEFAULT_MODEL
 STAGE_MODELS: dict[str, str] = {
     "clarification": DEFAULT_MODEL,
     "requirement": DEFAULT_MODEL,
+    "design_analysis": DEFAULT_MODEL,
     "business_analysis": DEFAULT_MODEL,
     "design_system": DEFAULT_MODEL,
     "information_architecture": DEFAULT_MODEL,

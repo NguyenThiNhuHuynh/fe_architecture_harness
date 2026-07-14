@@ -35,6 +35,7 @@ def build_argv(
     json_schema: dict[str, Any] | None,
     model: str,
     claude_bin: str = "claude",
+    max_budget_usd: float | None = None,
 ) -> list[str]:
     # user_prompt is piped via stdin to avoid Windows 32 KB command-line limit
     argv = [
@@ -52,12 +53,19 @@ def build_argv(
     ]
     if json_schema is not None:
         argv += ["--json-schema", json.dumps(json_schema)]
+    if max_budget_usd is not None:
+        argv += ["--max-budget-usd", str(max_budget_usd)]
     return argv
 
 
 class ClaudeCliProvider(Provider):
-    def __init__(self, claude_bin: str = "claude"):
+    def __init__(self, claude_bin: str = "claude", max_budget_usd: float | None = None):
         self.claude_bin = claude_bin
+        # Per-CALL cap enforced by the claude CLI itself (--max-budget-usd) —
+        # stops one runaway stage from spending unboundedly. Distinct from
+        # Orchestrator's pipeline-wide total cap, which stops the whole run
+        # once cumulative spend crosses a threshold.
+        self.max_budget_usd = max_budget_usd
 
     async def generate(
         self,
@@ -83,6 +91,7 @@ class ClaudeCliProvider(Provider):
                 json_schema=json_schema,
                 model=model,
                 claude_bin=self.claude_bin,
+                max_budget_usd=self.max_budget_usd,
             )
 
             start = time.monotonic()
@@ -137,9 +146,15 @@ class ClaudeCliProvider(Provider):
 
         cost_usd = None
         duration_ms = elapsed_ms
+        input_tokens = None
+        output_tokens = None
         if isinstance(envelope, dict):
             cost_usd = envelope.get("total_cost_usd", envelope.get("cost_usd"))
             duration_ms = envelope.get("duration_ms", elapsed_ms)
+            usage = envelope.get("usage")
+            if isinstance(usage, dict):
+                input_tokens = usage.get("input_tokens")
+                output_tokens = usage.get("output_tokens")
 
         return ProviderResult(
             raw_text=result_text if isinstance(result_text, str) else json.dumps(result_text),
@@ -147,4 +162,6 @@ class ClaudeCliProvider(Provider):
             model=model,
             duration_ms=duration_ms,
             cost_usd=cost_usd,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )

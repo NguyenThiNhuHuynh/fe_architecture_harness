@@ -5,6 +5,8 @@ from frontforge.core.orchestrator import Orchestrator
 from frontforge.shared.types import StageStatus
 from frontforge.shared.utils import write_json
 
+from conftest import read_events
+
 
 class RecordingHook(HumanReviewHook):
     """Test double: scripted answers per stage, consumed once (subsequent
@@ -49,6 +51,16 @@ async def test_hook_is_asked_for_every_stage_except_quality_review(session, scri
     assert "quality_review" not in hook.stage_calls
     assert set(hook.stage_calls) == set(states.keys()) - {"quality_review"}
     assert len(hook.quality_calls) == 1  # quality_review routed to review_quality instead
+
+    # Every HITL checkpoint call is now logged too, so a run's decisions
+    # (not just its stage outcomes) are reconstructable from the event log.
+    events = read_events(session)
+    hitl_decisions = [e for e in events if e["event"] == "hitl_decision"]
+    autofix_decisions = [e for e in events if e["event"] == "hitl_autofix_decision"]
+    assert {e["stage_id"] for e in hitl_decisions} == set(states.keys()) - {"quality_review"}
+    assert all(e["proceed"] is True for e in hitl_decisions)
+    assert len(autofix_decisions) == 1
+    assert autofix_decisions[0]["approved"] is False
 
 
 @pytest.mark.asyncio
@@ -105,3 +117,8 @@ async def test_quality_review_autofix_is_capped_to_avoid_an_infinite_loop(sessio
     # the cap is checked *before* asking, so the (N+1)-th completion is never
     # even asked about — quality_calls stops growing once the cap is hit.
     assert len(hook.quality_calls) == Orchestrator.MAX_HUMAN_REVISIONS
+
+    events = read_events(session)
+    skipped = [e for e in events if e["event"] == "hitl_autofix_skipped_cap_reached"]
+    assert len(skipped) == 1
+    assert skipped[0]["rounds"] == Orchestrator.MAX_HUMAN_REVISIONS

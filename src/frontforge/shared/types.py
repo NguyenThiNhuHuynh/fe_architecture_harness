@@ -44,6 +44,12 @@ class ProviderResult(BaseModel):
     model: str
     duration_ms: int
     cost_usd: float | None = None
+    # Populated only when the provider's own envelope reports them (the
+    # `claude` CLI's `--output-format json` doesn't always include a `usage`
+    # block) — left as None rather than guessed, since gen_ai.usage.*
+    # tracing attributes should reflect real counts or be omitted entirely.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class PromptSpec(BaseModel):
@@ -66,6 +72,11 @@ class AgentResult(BaseModel):
     stage_id: str
     output: dict[str, Any]
     provider_result: ProviderResult
+    # Carried back up so the orchestrator can log the *actual* prompt this
+    # attempt used without rebuilding it — tracing needs "what was sent",
+    # not just "what came back".
+    system_prompt: str = ""
+    user_prompt: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +160,39 @@ class ColorToken(BaseModel):
 class TypographySpec(BaseModel):
     font_family: str
     scale: list[str] = Field(default_factory=list)
+
+
+class FigmaPageInfo(BaseModel):
+    name: str
+    frames: list[str] = Field(default_factory=list, description="Top-level frame names on this Figma page.")
+
+
+class FigmaTypographyStyle(BaseModel):
+    name: str
+    font_family: str = ""
+    font_size: str = ""
+
+
+class FigmaComponentInfo(BaseModel):
+    name: str
+    variants: list[str] = Field(default_factory=list)
+
+
+class DesignAnalysisResult(BaseModel):
+    """Output of the `design_analysis` stage. `source` is "none" whenever no
+    Figma URL was supplied — this stage always runs (cheap no-op in that
+    case) rather than being conditionally skipped, so the DAG stays simple.
+    """
+
+    source: Literal["figma", "none"] = "none"
+    pages: list[FigmaPageInfo] = Field(default_factory=list)
+    color_tokens: list[ColorToken] = Field(default_factory=list)
+    typography: list[FigmaTypographyStyle] = Field(default_factory=list)
+    components: list[FigmaComponentInfo] = Field(default_factory=list)
+    notes: list[str] = Field(
+        default_factory=list,
+        description="Anything ambiguous or lost while interpreting the Figma file.",
+    )
 
 
 class DesignSystemSpec(BaseModel):
@@ -267,6 +311,7 @@ class QualityReviewResult(BaseModel):
 STAGE_OUTPUT_MODELS: dict[str, type[BaseModel]] = {
     "clarification": ProjectBrief,
     "requirement": RequirementSpec,
+    "design_analysis": DesignAnalysisResult,
     "business_analysis": BusinessAnalysisResult,
     "design_system": DesignSystemSpec,
     "information_architecture": IAResult,

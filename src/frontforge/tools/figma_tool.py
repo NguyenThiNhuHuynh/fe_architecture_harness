@@ -22,6 +22,11 @@ from typing import Any
 FIGMA_API_BASE = "https://api.figma.com/v1"
 _FILE_KEY_RE = re.compile(r"figma\.com/(?:file|design)/([a-zA-Z0-9]+)")
 
+# Screenshots cost real tokens once attached to an LLM call — bound how many
+# frames a single file can push through fetch_frame_images regardless of how
+# many screens the actual file has.
+MAX_IMAGE_FRAMES = 20
+
 # HTTP statuses where retrying the identical request is pointless — the token
 # is wrong/lacks access (401/403) or the file doesn't exist for it (404).
 # Anything else (429 rate limit, 5xx) might succeed on a later attempt.
@@ -111,7 +116,10 @@ class FigmaTool:
         pages = [
             {
                 "name": page.get("name", ""),
-                "frames": [child.get("name", "") for child in page.get("children", [])],
+                "frames": [
+                    {"id": child.get("id", ""), "name": child.get("name", "")}
+                    for child in page.get("children", [])
+                ],
             }
             for page in file_data.get("document", {}).get("children", [])
         ]
@@ -128,3 +136,54 @@ class FigmaTool:
             if isinstance(components_meta, dict)
             else components_meta,
         )
+
+    async def fetch_frame_images(self, file_key: str, node_ids: list[str]) -> dict[str, bytes]:
+        """Render PNGs for up to MAX_IMAGE_FRAMES of the given frame node ids
+        via Figma's `/images` endpoint (which returns temporary S3 URLs),
+        then downloads each. Best-effort: a frame whose render/download
+        fails is silently dropped rather than failing the whole fetch — a
+        missing screenshot just means no visual reference for that one
+        page, not a stage failure.
+        """
+        import httpx
+
+        node_ids = [n for n in node_ids if n][:MAX_IMAGE_FRAMES]
+        if not node_ids:
+            return {}
+        headers = self._headers()
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                resp = await client.get(
+                    f"{FIGMA_API_BASE}/images/{file_key}",
+                    headers=headers,
+                    params={"ids": ",".join(node_ids), "format": "png"},
+                )
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                raise FigmaFetchError(
+                    f"Figma API returned {status} for {exc.request.url}",
+                    retryable=status not in _NON_RETRYABLE_STATUSES,
+                ) from exc
+            except httpx.RequestError as exc:
+                raise FigmaFetchError(f"could not reach Figma API: {exc}") from exc
+
+            image_urls: dict[str, str] = {
+                node_id: url for node_id, url in (resp.json().get("images") or {}).items() if url
+            }
+            if not image_urls:
+                return {}
+
+            downloads = await asyncio.gather(
+                *(client.get(url) for url in image_urls.values()), return_exceptions=True
+            )
+
+        images: dict[str, bytes] = {}
+        for node_id, download in zip(image_urls.keys(), downloads):
+            if isinstance(download, BaseException):
+                continue
+            if download.status_code != 200:
+                continue
+            images[node_id] = download.content
+        return images

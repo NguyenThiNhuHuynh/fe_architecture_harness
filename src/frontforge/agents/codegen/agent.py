@@ -11,12 +11,14 @@ which delegates to StageAgent._generate_once()).
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 from typing import Any
 
 from frontforge.agents.base import StageAgent
+from frontforge.core.session import RunSession
 from frontforge.providers.base import Provider
-from frontforge.shared.types import AgentResult, CodegenResult, ProviderResult
+from frontforge.shared.types import AgentResult, CodegenResult, ImageAttachment, ProviderResult
 
 
 class CodegenAgent(StageAgent):
@@ -37,19 +39,20 @@ class CodegenAgent(StageAgent):
         model: str | None = None,
         verification_errors: list[str] | None = None,
         on_batch_cost: Callable[[float], None] | None = None,
+        session: RunSession | None = None,
     ) -> AgentResult:
-        seed = await self.prepare_context(seed)
+        seed = await self.prepare_context(seed, session=session)
         pages = ancestors.get("page_planning", {}).get("pages", [])
 
         if len(pages) <= self.BATCH_SIZE:
             return await self._run_single(
                 provider, seed=seed, ancestors=ancestors, model=model,
-                verification_errors=verification_errors,
+                verification_errors=verification_errors, session=session,
             )
         return await self._run_batched(
             provider, seed=seed, ancestors=ancestors, model=model,
             verification_errors=verification_errors,
-            on_batch_cost=on_batch_cost,
+            on_batch_cost=on_batch_cost, session=session,
         )
 
     async def _run_single(
@@ -60,6 +63,7 @@ class CodegenAgent(StageAgent):
         ancestors: dict[str, dict[str, Any]],
         model: str | None,
         verification_errors: list[str] | None,
+        session: RunSession | None = None,
     ) -> AgentResult:
         """One call, one response, used whenever the project is small enough
         to fit — reuses the same build-prompt -> call-provider ->
@@ -67,8 +71,59 @@ class CodegenAgent(StageAgent):
         default path) instead of duplicating it. `seed` was already passed
         through prepare_context() by run() before reaching here."""
         return await self._generate_once(
-            provider, seed=seed, ancestors=ancestors, model=model, verification_errors=verification_errors
+            provider, seed=seed, ancestors=ancestors, model=model,
+            verification_errors=verification_errors, session=session,
         )
+
+    def image_attachments(
+        self,
+        seed: dict[str, Any],
+        *,
+        ancestors: dict[str, dict[str, Any]],
+        session: RunSession | None = None,
+    ) -> list[ImageAttachment]:
+        """Only used on the `_run_single` (unbatched) path — `_run_batched`
+        resolves images per batch itself via `_resolve_page_images` since
+        each batch only covers a slice of `pages`."""
+        pages = ancestors.get("page_planning", {}).get("pages", [])
+        return self._resolve_page_images(pages, ancestors, session)
+
+    def _resolve_page_images(
+        self,
+        pages: list[dict[str, Any]],
+        ancestors: dict[str, dict[str, Any]],
+        session: RunSession | None,
+    ) -> list[ImageAttachment]:
+        """Match each page's `figma_frame_ref` (set by page_planning) against
+        design_analysis's fetched frames, and load the corresponding
+        screenshot (if any) as a visual reference for codegen."""
+        if session is None:
+            return []
+        image_path_by_frame_name: dict[str, str] = {}
+        for page_info in ancestors.get("design_analysis", {}).get("pages", []):
+            for frame in page_info.get("frames", []):
+                name = frame.get("name")
+                image_path = frame.get("image_path")
+                if name and image_path:
+                    image_path_by_frame_name[name] = image_path
+
+        images: list[ImageAttachment] = []
+        for page in pages:
+            frame_ref = page.get("figma_frame_ref")
+            image_path = image_path_by_frame_name.get(frame_ref) if frame_ref else None
+            if not image_path:
+                continue
+            image_file = session.figma_assets_dir / image_path
+            if not image_file.exists():
+                continue
+            images.append(
+                ImageAttachment(
+                    label=page.get("name", frame_ref),
+                    media_type="image/png",
+                    base64_data=base64.b64encode(image_file.read_bytes()).decode("ascii"),
+                )
+            )
+        return images
 
     def _plan_batches(self, ancestors: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         pages = ancestors.get("page_planning", {}).get("pages", [])
@@ -113,6 +168,7 @@ class CodegenAgent(StageAgent):
         model: str | None,
         verification_errors: list[str] | None,
         on_batch_cost: Callable[[float], None] | None = None,
+        session: RunSession | None = None,
     ) -> AgentResult:
         batches = self._plan_batches(ancestors)
         schema = self.output_model.model_json_schema()
@@ -156,6 +212,7 @@ class CodegenAgent(StageAgent):
                 user_prompt=prompt.user_prompt,
                 json_schema=schema,
                 model=model,
+                images=self._resolve_page_images(batch["pages"], ancestors, session),
             )
             # Record spend/duration before the data-shape check below — the
             # call already happened and was billed even if its response

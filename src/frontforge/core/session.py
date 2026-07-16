@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from frontforge.shared.constants import (
+    FIGMA_ASSETS_DIR_NAME,
     GENERATED_DIR_NAME,
     HARNESS_DIR_NAME,
     LOGS_DIR_NAME,
@@ -49,11 +50,16 @@ class RunSession:
     def generated_dir(self) -> Path:
         return self.project_root / GENERATED_DIR_NAME
 
+    @property
+    def figma_assets_dir(self) -> Path:
+        return self.harness_dir / FIGMA_ASSETS_DIR_NAME
+
     def scaffold(self) -> None:
         ensure_dir(self.harness_dir)
         ensure_dir(self.outputs_dir)
         ensure_dir(self.logs_dir)
         ensure_dir(self.generated_dir)
+        ensure_dir(self.figma_assets_dir)
 
     @classmethod
     def at(cls, project_root: str | Path) -> "RunSession":

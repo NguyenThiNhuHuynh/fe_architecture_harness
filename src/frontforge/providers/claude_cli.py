@@ -19,7 +19,7 @@ from typing import Any
 
 from frontforge.providers.base import Provider
 from frontforge.shared.constants import DEFAULT_MODEL, DEFAULT_TIMEOUT_SECONDS
-from frontforge.shared.types import ProviderResult
+from frontforge.shared.types import ImageAttachment, ProviderResult
 
 
 class ClaudeCliError(RuntimeError):
@@ -36,26 +36,48 @@ def build_argv(
     model: str,
     claude_bin: str = "claude",
     max_budget_usd: float | None = None,
+    with_images: bool = False,
 ) -> list[str]:
     # user_prompt is piped via stdin to avoid Windows 32 KB command-line limit
-    argv = [
-        claude_bin,
-        "-p",
-        "--system-prompt-file",
-        system_prompt_file,
-        "--output-format",
-        "json",
-        "--model",
-        model,
-        "--no-session-persistence",
-        "--tools",
-        "",
-    ]
+    argv = [claude_bin, "-p", "--system-prompt-file", system_prompt_file]
+    if with_images:
+        # Image content blocks require the structured stdin protocol
+        # (--input-format stream-json), which the CLI only allows paired
+        # with a matching structured output stream — --output-format json
+        # is rejected in that mode — and --verbose is required by --print
+        # + --output-format stream-json. The closing `type: "result"` line
+        # carries the same result/total_cost_usd/usage/duration_ms fields
+        # as the plain json envelope (see `_extract_envelope`).
+        argv += ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
+    else:
+        argv += ["--output-format", "json"]
+    argv += ["--model", model, "--no-session-persistence", "--tools", ""]
     if json_schema is not None:
         argv += ["--json-schema", json.dumps(json_schema)]
     if max_budget_usd is not None:
         argv += ["--max-budget-usd", str(max_budget_usd)]
     return argv
+
+
+def _build_stdin_payload(user_prompt: str, images: list[ImageAttachment]) -> bytes:
+    if not images:
+        return user_prompt.encode("utf-8")
+    content: list[dict[str, Any]] = []
+    for img in images:
+        # A text block naming each image immediately before it, since the
+        # model otherwise has no way to tell which screenshot is which once
+        # there's more than one in the same turn.
+        content.append({"type": "text", "text": f"Screenshot: {img.label}"})
+        content.append(
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": img.media_type, "data": img.base64_data},
+            }
+        )
+    content.append({"type": "text", "text": user_prompt})
+    message = {"type": "user", "message": {"role": "user", "content": content}}
+    # A single NDJSON line — one user turn, no multi-turn streaming needed.
+    return (json.dumps(message) + "\n").encode("utf-8")
 
 
 class ClaudeCliProvider(Provider):
@@ -75,9 +97,11 @@ class ClaudeCliProvider(Provider):
         json_schema: dict[str, Any] | None = None,
         model: str | None = None,
         timeout: int | None = None,
+        images: list[ImageAttachment] | None = None,
     ) -> ProviderResult:
         model = model or DEFAULT_MODEL
         timeout = timeout or DEFAULT_TIMEOUT_SECONDS
+        images = images or []
 
         tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=".md", delete=False, encoding="utf-8"
@@ -92,7 +116,9 @@ class ClaudeCliProvider(Provider):
                 model=model,
                 claude_bin=self.claude_bin,
                 max_budget_usd=self.max_budget_usd,
+                with_images=bool(images),
             )
+            stdin_payload = _build_stdin_payload(user_prompt, images)
 
             start = time.monotonic()
             proc = await asyncio.create_subprocess_exec(
@@ -103,7 +129,7 @@ class ClaudeCliProvider(Provider):
             )
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    proc.communicate(input=user_prompt.encode("utf-8")), timeout=timeout
+                    proc.communicate(input=stdin_payload), timeout=timeout
                 )
             except asyncio.TimeoutError:
                 proc.kill()
@@ -124,13 +150,39 @@ class ClaudeCliProvider(Provider):
         return self._parse_output(stdout, model=model, elapsed_ms=elapsed_ms)
 
     @staticmethod
-    def _parse_output(stdout: str, *, model: str, elapsed_ms: int) -> ProviderResult:
+    def _extract_envelope(stdout: str) -> dict[str, Any]:
+        # Plain mode (--output-format json): the whole stdout is one JSON
+        # object. Image mode (--output-format stream-json): stdout is
+        # NDJSON — one event per line — and the closing `type: "result"`
+        # line carries the same result/total_cost_usd/usage/duration_ms
+        # fields the plain envelope does, so the rest of this parser
+        # doesn't need to know which mode produced it.
         try:
             envelope = json.loads(stdout)
-        except json.JSONDecodeError as exc:
-            raise ClaudeCliError(
-                f"could not parse claude CLI stdout as JSON: {exc}", stdout=stdout
-            ) from exc
+            if isinstance(envelope, dict):
+                return envelope
+        except json.JSONDecodeError:
+            pass
+
+        result_event: dict[str, Any] | None = None
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and obj.get("type") == "result":
+                result_event = obj
+        if result_event is not None:
+            return result_event
+
+        raise ClaudeCliError("could not parse claude CLI stdout as JSON", stdout=stdout)
+
+    @staticmethod
+    def _parse_output(stdout: str, *, model: str, elapsed_ms: int) -> ProviderResult:
+        envelope = ClaudeCliProvider._extract_envelope(stdout)
 
         result_text = envelope.get("result", stdout) if isinstance(envelope, dict) else stdout
         data: dict[str, Any] | None = None

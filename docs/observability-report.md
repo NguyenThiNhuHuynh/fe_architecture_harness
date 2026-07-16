@@ -43,7 +43,7 @@ Kết quả được ghi ra 3 nơi (trong thư mục logs của mỗi project):
 - Một file **dòng thời gian** — Trace theo cấu trúc cây, thể hiện quan hệ giữa các bước và thời gian thực thi.
 - Một file **con số thống kê** — Các chỉ số tổng hợp như số lần gọi model, token, chi phí, thời gian, tỷ lệ lỗi...
 
-## 3. Dùng cho AI Architecture Harness
+## 3. Dùng cho AI Architecture Harness (v2)
 
 Bài toán đặt ra là một Agent Harness gồm khoảng 12 bước xử lý, trong đó nhiều bước phải gọi mô hình AI thật. Một lần chạy có thể kéo dài từ 20–40 phút, có thể phải thử lại (retry), có bước cần con người phê duyệt (Human-in-the-loop), và kết quả của AI không hoàn toàn giống nhau giữa các lần chạy do tính non-deterministic. Vì vậy, khi một lần chạy thất bại, việc xác định chính xác nguyên nhân là rất khó nếu chỉ dựa vào các thông báo lỗi đơn giản.
 
@@ -56,6 +56,41 @@ Những câu hỏi và cách lớp Observability giúp:
 | Lỗi nào hay lặp lại nhất?                     | Không tổng hợp được                              | Mỗi lỗi được ghi rõ loại lỗi, mức độ nghiêm trọng, có thể gộp lại xem cái nào hay xảy ra |
 | Con người đã can thiệp bao nhiêu lần, vì sao? | Không ghi gì cả                                  | Ghi đầy đủ từng lần, kèm lý do                                                           |
 
+Ba loại dữ liệu này chạy song song và có thể đối chiếu qua lại với nhau (cùng một sự kiện thì log, trace, metric đều nhìn thấy). Cụ thể từng phần:
+
+### 3.1. Traces — Dòng thời gian dạng cây
+
+**Trả lời:** bước nào đang nằm trong bước lớn nào, chạy trong bao lâu, và nếu có thử lại hoặc chờ con người duyệt thì việc đó xảy ra ở đâu trong luồng chạy.
+
+Mỗi bước (ví dụ "requirement", "codegen") là một nhánh trên cây. Nếu bước đó thử lại nhiều lần, số lần thử được cộng dồn ngay trên nhánh đó chứ không tách rời — nhìn vào là biết bước này thử mấy lần mới qua hoặc mới bỏ cuộc. Nếu bước cần con người duyệt, việc duyệt đó nằm lồng bên trong nhánh của bước, kèm thông tin: đồng ý hay từ chối, có mấy vấn đề được nêu ra, có yêu cầu sửa lại không. Khi một nhánh kết thúc, hệ thống ghi lại luôn: mất bao lâu, tốn bao nhiêu tiền, thử mấy lần, kết quả cuối là qua hay fail.
+
+Dữ liệu này được ghi theo chuẩn phổ biến (OpenTelemetry), nên sau này nếu muốn xem bằng công cụ trực quan (Jaeger, Tempo...) thì chỉ cần đổi nơi xuất dữ liệu, không phải viết lại phần sinh ra trace.
+
+### 3.2. Metrics — Con số thống kê tổng hợp
+
+**Trả lời:** các câu hỏi kiểu tổng quan — "trung bình bước này mất bao lâu", "tỷ lệ fail bao nhiêu phần trăm", "tốn bao nhiêu tiền rồi" — mà không cần đọc từng dòng log.
+
+Có 3 con số được theo dõi cho mỗi bước:
+
+- **Thời gian chạy** của từng bước, để tính ra trung bình hoặc trường hợp chạy lâu nhất.
+- **Số lần hoàn tất / số lần fail** của từng bước.
+- **Chi phí** (USD) đã tốn cho từng bước.
+
+Các con số này được cập nhật liên tục trong lúc chạy (vài giây một lần) và ghi ra một file riêng, tách biệt với file trace. Đây là số liệu của **một lần chạy**; muốn xem gộp **nhiều lần chạy** trước đó (ví dụ trung bình xuyên suốt cả tháng) thì dùng lệnh `stats` ở mục 4 — lệnh này gom lại từ file nhật ký chi tiết (mục 3.3), không phải từ file này.
+
+### 3.3. Logs — Nhật ký chi tiết từng sự kiện
+
+**Trả lời:** chính xác thì lúc đó đã hỏi AI câu gì, AI trả lời gì, và ai đã quyết định gì — mức chi tiết sâu nhất, dùng khi cần debug một trường hợp cụ thể.
+
+Có hai loại file song song:
+
+- **Một file đọc được bằng mắt thường** — dạng văn bản bình thường, vừa hiện ra màn hình vừa lưu vào file, dùng để theo dõi trực tiếp khi đang chạy.
+- **Một file dạng dữ liệu (mỗi dòng 1 sự kiện)** — để máy đọc lại và tổng hợp. Mỗi dòng đều gắn kèm thời gian và có thể nối ngược lại đúng vị trí trên cây trace ở mục 3.1. Các sự kiện chính được ghi: bước hoàn tất/thất bại (kèm thời gian, chi phí), một lần thử bị kiểm tra không đạt (kèm loại lỗi), một bước bị đánh dấu phải chạy lại (kèm lý do), và con người đồng ý/từ chối ở bước duyệt.
+
+Riêng nội dung hỏi-đáp với AI (system prompt, câu hỏi, câu trả lời) được lưu thành **file riêng, đầy đủ, không cắt bớt** cho mỗi lần gọi — vì phần quan trọng nhất (chỉ dẫn và lỗi cần sửa) thường nằm ở cuối, nếu chỉ lưu bản rút gọn thì đúng phần đó sẽ mất trước tiên.
+
+Toàn bộ các file dạng dữ liệu này, gộp lại qua nhiều lần chạy, chính là nguồn dữ liệu cho lệnh `stats` ở mục 4: tính ra tỷ lệ thành công, thời gian trung bình/lâu nhất, tổng chi phí, và số lần con người can thiệp của từng bước.
+
 ## 4. Code đã làm được tới đâu
 
 ### Đã làm xong
@@ -64,8 +99,8 @@ Những câu hỏi và cách lớp Observability giúp:
 Mỗi lần chạy pipeline sẽ có 1 file nhật ký riêng, mỗi dòng ghi lại 1 sự việc. Các sự việc được ghi:
 
 - Mỗi lần gọi AI: nội dung đã hỏi, AI trả lời gì, tốn bao nhiêu tiền, mất bao lâu.
-- Mỗi lần kiểm tra kết quả bị fail: lỗi gì, mức độ nghiêm trọng ra sao.
-- Mỗi lần hỏi ý kiến con người: đồng ý hay từ chối, có yêu cầu sửa gì không.
+- Mỗi lần kiểm tra kết quả bị fail: lỗi gì, mức độ nghiêm trọng.
+- Mỗi lần hỏi ý kiến con người: đồng ý hay từ chối, có yêu cầu sửa gì.
 - Mỗi lần một bước bị đánh dấu "phải chạy lại": chạy lại bước nào, kéo theo những bước nào khác, vì lý do gì (con người từ chối / tự động sửa lỗi / thao tác thủ công).
 
 **Dòng thời gian + con số thống kê (`core/tracing.py`, `core/orchestrator.py`)**
@@ -76,7 +111,6 @@ Gom tất cả các lần chạy trước đó lại, tính ra: bước nào tru
 
 ### Còn thiếu / hướng làm tiếp theo
 
-- **Chưa có nơi lưu trữ tập trung để xem biểu đồ** — hiện dữ liệu chỉ ghi ra file để chứng minh đúng cấu trúc, chưa có màn hình trực quan thật sự.
+- **Chưa có nơi lưu trữ tập trung để xem** — hiện dữ liệu chỉ ghi ra file để chứng minh đúng cấu trúc, chưa có màn hình trực quan thật sự.
 - Chưa ghi được "lý do AI dừng trả lời" (hết giới hạn, tự kết thúc, hay bị chặn) — cần kiểm tra thêm khi chạy thật với AI thật.
-- Các con số thống kê mới dừng ở 3 loại cơ bản (thời gian, số lần, chi phí) — chưa có thêm loại "đang chạy cùng lúc bao nhiêu bước".
 - Test toàn bộ lớp

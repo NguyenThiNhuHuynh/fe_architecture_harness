@@ -96,9 +96,9 @@ def metric_data_points(metrics_data, metric_name: str):
 def read_events(session: RunSession) -> list[dict]:
     """All JSONL event records logged for this session's run(s), in order —
     a test helper since every observability assertion needs to parse the
-    same events-*.jsonl file(s)."""
+    same logs-*.jsonl file(s)."""
     events: list[dict] = []
-    for events_file in sorted(session.logs_dir.glob("events-*.jsonl")):
+    for events_file in sorted(session.logs_dir.glob("logs-*.jsonl")):
         for line in events_file.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 events.append(json.loads(line))

@@ -7,7 +7,7 @@ def _write_events(logs_dir, run_id, lines):
     import json
 
     logs_dir.mkdir(parents=True, exist_ok=True)
-    path = logs_dir / f"events-{run_id}.jsonl"
+    path = logs_dir / f"logs-{run_id}.jsonl"
     path.write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
 
 

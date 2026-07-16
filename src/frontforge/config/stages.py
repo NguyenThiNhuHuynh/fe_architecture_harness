@@ -40,6 +40,11 @@ STAGES: list[StageDefinition] = [
         ("business_analysis", "design_analysis"),
     ),
     StageDefinition("frontend_architecture", FrontendArchitectureAgent, ("information_architecture",)),
+    # page_planning and codegen don't declare a *direct* edge to
+    # design_analysis — StageRegistry.ancestors_of() walks the full
+    # transitive closure of depends_on, so design_analysis's output (it's
+    # already an ancestor via information_architecture) reaches both agents'
+    # `ancestors` dict regardless. A direct edge here would be redundant.
     StageDefinition("page_planning", PagePlanningAgent, ("frontend_architecture",)),
     StageDefinition("component_planning", ComponentPlanningAgent, ("page_planning",)),
     StageDefinition(

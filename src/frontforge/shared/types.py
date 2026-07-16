@@ -52,9 +52,21 @@ class ProviderResult(BaseModel):
     output_tokens: int | None = None
 
 
+class ImageAttachment(BaseModel):
+    """A single image sent alongside a prompt turn — e.g. a rendered Figma
+    frame used as a visual reference. `label` is shown to the model so it
+    can refer back to "the Login screenshot" etc.
+    """
+
+    label: str
+    media_type: str
+    base64_data: str
+
+
 class PromptSpec(BaseModel):
     system_prompt: str
     user_prompt: str
+    images: list[ImageAttachment] = Field(default_factory=list)
 
 
 class VerificationIssue(BaseModel):
@@ -155,6 +167,10 @@ class ColorToken(BaseModel):
     name: str
     value: str
     usage: str = ""
+    inferred: bool = Field(
+        default=False,
+        description="True when read off a screenshot rather than a published Figma style.",
+    )
 
 
 class TypographySpec(BaseModel):
@@ -162,20 +178,37 @@ class TypographySpec(BaseModel):
     scale: list[str] = Field(default_factory=list)
 
 
+class FigmaFrameInfo(BaseModel):
+    id: str = ""
+    name: str
+    image_path: str = Field(
+        default="",
+        description="Path (relative to .harness/figma_assets/) to this frame's rendered screenshot, if fetched.",
+    )
+
+
 class FigmaPageInfo(BaseModel):
     name: str
-    frames: list[str] = Field(default_factory=list, description="Top-level frame names on this Figma page.")
+    frames: list[FigmaFrameInfo] = Field(default_factory=list, description="Top-level frames on this Figma page.")
 
 
 class FigmaTypographyStyle(BaseModel):
     name: str
     font_family: str = ""
     font_size: str = ""
+    inferred: bool = Field(
+        default=False,
+        description="True when read off a screenshot rather than a published Figma style.",
+    )
 
 
 class FigmaComponentInfo(BaseModel):
     name: str
     variants: list[str] = Field(default_factory=list)
+    inferred: bool = Field(
+        default=False,
+        description="True when read off a screenshot rather than a published Figma component.",
+    )
 
 
 class DesignAnalysisResult(BaseModel):
@@ -246,6 +279,10 @@ class PageSpec(BaseModel):
     sections: list[str] = Field(default_factory=list)
     data_requirements: list[str] = Field(default_factory=list)
     roles_allowed: list[str] = Field(default_factory=list)
+    figma_frame_ref: str = Field(
+        default="",
+        description="Name of the matching Figma frame (from design_analysis.pages), if this page corresponds to one.",
+    )
 
 
 class PagePlan(BaseModel):

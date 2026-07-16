@@ -55,7 +55,10 @@ def _mock_figma_transport() -> httpx.MockTransport:
                         "children": [
                             {
                                 "name": "Page 1",
-                                "children": [{"name": "Login"}, {"name": "Dashboard"}],
+                                "children": [
+                                    {"id": "10:1", "name": "Login"},
+                                    {"id": "10:2", "name": "Dashboard"},
+                                ],
                             }
                         ]
                     }
@@ -91,7 +94,15 @@ async def test_fetch_parses_pages_styles_and_components(monkeypatch):
     tool = FigmaTool(access_token="fake-token")
     data = await tool.fetch("https://www.figma.com/file/ABC123/My-Design")
 
-    assert data.pages == [{"name": "Page 1", "frames": ["Login", "Dashboard"]}]
+    assert data.pages == [
+        {
+            "name": "Page 1",
+            "frames": [
+                {"id": "10:1", "name": "Login"},
+                {"id": "10:2", "name": "Dashboard"},
+            ],
+        }
+    ]
     assert data.styles == [{"name": "Primary", "styleType": "FILL"}]
     assert data.components == [{"name": "Button/Primary"}]
 
@@ -176,3 +187,97 @@ async def test_fetch_calls_all_three_endpoints_concurrently(monkeypatch):
     elapsed = time.monotonic() - start
 
     assert elapsed < 0.12  # well under the ~0.15s a sequential run would take
+
+
+def _mock_images_transport(
+    missing: set[str] | None = None, image_bytes: dict[str, bytes] | None = None
+) -> httpx.MockTransport:
+    missing = missing or set()
+    image_bytes = image_bytes or {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/images/ABC123":
+            ids = (request.url.params.get("ids") or "").split(",")
+            images = {
+                node_id: f"https://cdn.example.com/{node_id.replace(':', '_')}.png"
+                for node_id in ids
+                if node_id not in missing
+            }
+            return httpx.Response(200, json={"images": images})
+        if request.url.host == "cdn.example.com":
+            node_id = request.url.path.strip("/").removesuffix(".png").replace("_", ":")
+            return httpx.Response(200, content=image_bytes.get(node_id, b"fake-png-bytes"))
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handler)
+
+
+def _patch_async_client(monkeypatch, transport: httpx.MockTransport) -> None:
+    import httpx as httpx_module
+
+    real_async_client = httpx_module.AsyncClient
+
+    def patched_async_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx_module, "AsyncClient", patched_async_client)
+
+
+@pytest.mark.asyncio
+async def test_fetch_frame_images_downloads_rendered_pngs(monkeypatch):
+    _patch_async_client(monkeypatch, _mock_images_transport())
+
+    tool = FigmaTool(access_token="fake-token")
+    images = await tool.fetch_frame_images("ABC123", ["10:1", "10:2"])
+
+    assert set(images.keys()) == {"10:1", "10:2"}
+    assert images["10:1"] == b"fake-png-bytes"
+
+
+@pytest.mark.asyncio
+async def test_fetch_frame_images_returns_empty_dict_for_no_node_ids():
+    tool = FigmaTool(access_token="fake-token")
+    assert await tool.fetch_frame_images("ABC123", []) == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_frame_images_skips_frames_figma_could_not_render(monkeypatch):
+    _patch_async_client(monkeypatch, _mock_images_transport(missing={"10:2"}))
+
+    tool = FigmaTool(access_token="fake-token")
+    images = await tool.fetch_frame_images("ABC123", ["10:1", "10:2"])
+
+    assert set(images.keys()) == {"10:1"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_frame_images_non_retryable_on_404(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    _patch_async_client(monkeypatch, httpx.MockTransport(handler))
+
+    tool = FigmaTool(access_token="fake-token")
+    with pytest.raises(FigmaFetchError) as exc_info:
+        await tool.fetch_frame_images("ABC123", ["10:1"])
+    assert exc_info.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_frame_images_caps_to_max_frames(monkeypatch):
+    from frontforge.tools.figma_tool import MAX_IMAGE_FRAMES
+
+    requested_ids: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_ids.extend((request.url.params.get("ids") or "").split(","))
+        return httpx.Response(200, json={"images": {}})
+
+    _patch_async_client(monkeypatch, httpx.MockTransport(handler))
+
+    tool = FigmaTool(access_token="fake-token")
+    many_ids = [f"1:{i}" for i in range(MAX_IMAGE_FRAMES + 10)]
+    await tool.fetch_frame_images("ABC123", many_ids)
+
+    assert len(requested_ids) == MAX_IMAGE_FRAMES

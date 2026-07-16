@@ -169,7 +169,7 @@ def reset(
 
 @app.command()
 def stats(project: Path = typer.Argument(..., help="Project workspace directory.")):
-    """Cross-run stats from every events-*.jsonl log: per-stage success rate,
+    """Cross-run stats from every logs-*.jsonl log: per-stage success rate,
     duration percentiles (p50/p95/p99), total cost, verification-failure,
     mark_dirty and HITL-ask counts — folded across all past runs, not just
     the most recent one."""
@@ -182,7 +182,7 @@ def stats(project: Path = typer.Argument(..., help="Project workspace directory.
         raise typer.Exit(code=1)
 
     per_stage = compute_stage_stats(events)
-    run_count = len(list(session.logs_dir.glob("events-*.jsonl")))
+    run_count = len(list(session.logs_dir.glob("logs-*.jsonl")))
 
     table = Table(title=f"Cross-run stats ({run_count} run log(s))")
     table.add_column("Stage")

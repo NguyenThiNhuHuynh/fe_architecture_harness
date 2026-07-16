@@ -25,4 +25,13 @@ you below. You only ever interpret it.
     with the variant as a suffix in `variants`
 - Do not invent pages/colors/components that aren't present in the given
   data — under-reporting is fine and should be noted; over-reporting is not.
+- If Figma's published styles and components are BOTH empty but reference
+  screenshots are attached to this message, fall back to visually reading
+  the screens instead of leaving `color_tokens`/`typography`/`components`
+  empty: identify the recurring colors, text styles, and repeated UI
+  elements you can actually see. Mark every entry produced this way with
+  `inferred: true` (leave it `false`/default for anything read from real
+  published styles/components), and add a `notes` entry saying these are a
+  best-effort visual read, not exact hex/design-token values. This is still
+  "don't invent" — only report what's visibly present in the screenshots.
 - Output must strictly match the provided JSON schema.

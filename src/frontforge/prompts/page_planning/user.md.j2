@@ -10,5 +10,11 @@
 
 {{ ancestors.get("requirement", {}).get("roles", []) | pretty_json }}
 
-Produce the Page Plan (one PageSpec per sitemap route).
+## Figma pages / frames
+
+{{ ancestors.get("design_analysis", {}).get("pages", []) | pretty_json }}
+
+Produce the Page Plan (one PageSpec per sitemap route). If a page you're
+planning clearly corresponds to one of the Figma frames above, set that
+page's `figma_frame_ref` to the frame's exact `name`; otherwise leave it "".
 {% include "verification_errors.j2" %}

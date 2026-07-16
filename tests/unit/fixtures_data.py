@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from frontforge.providers.base import Provider
-from frontforge.shared.types import STAGE_OUTPUT_MODELS, ProviderResult
+from frontforge.shared.types import STAGE_OUTPUT_MODELS, ImageAttachment, ProviderResult
 
 VALID_OUTPUTS: dict[str, dict[str, Any]] = {
     "clarification": {
@@ -114,9 +114,15 @@ class ScriptedProvider(Provider):
         json_schema: dict[str, Any] | None = None,
         model: str | None = None,
         timeout: int | None = None,
+        images: list[ImageAttachment] | None = None,
     ) -> ProviderResult:
         self.calls.append(
-            {"system_prompt": system_prompt, "user_prompt": user_prompt, "json_schema": json_schema}
+            {
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "json_schema": json_schema,
+                "images": images or [],
+            }
         )
         title = (json_schema or {}).get("title", "")
         value = self.outputs_by_title.get(title, {})

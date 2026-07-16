@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 import frontforge.core.lock as lock_module
@@ -32,7 +34,9 @@ class _MultiCallFakeAgent(StageAgent):
         self.call_costs = call_costs
         self.fail_at = fail_at
 
-    async def run(self, provider, *, seed, ancestors, model=None, verification_errors=None, on_batch_cost=None):
+    async def run(
+        self, provider, *, seed, ancestors, model=None, verification_errors=None, on_batch_cost=None, session=None
+    ):
         for i, cost in enumerate(self.call_costs):
             if on_batch_cost is not None:
                 on_batch_cost(cost)
@@ -64,7 +68,9 @@ class _AlwaysFailsAgent(StageAgent):
         self.exc = exc
         self.call_count = 0
 
-    async def run(self, provider, *, seed, ancestors, model=None, verification_errors=None, on_batch_cost=None):
+    async def run(
+        self, provider, *, seed, ancestors, model=None, verification_errors=None, on_batch_cost=None, session=None
+    ):
         self.call_count += 1
         raise self.exc
 
@@ -91,7 +97,7 @@ async def test_full_pipeline_runs_to_done_with_valid_outputs(session, scripted_p
         assert state.duration_ms is not None and state.duration_ms >= 0
         assert state.cost_usd == pytest.approx(0.02)
 
-    events_files = list(session.logs_dir.glob("events-*.jsonl"))
+    events_files = list(session.logs_dir.glob("logs-*.jsonl"))
     assert len(events_files) == 1
     events_text = events_files[0].read_text(encoding="utf-8")
     assert events_text.count('"event": "stage_done"') == len(states)
@@ -118,6 +124,32 @@ async def test_full_pipeline_runs_to_done_with_valid_outputs(session, scripted_p
     assert len(trace_ids) == 1
     span_ids = {call["span_id"] for call in llm_calls}
     assert len(span_ids) == len(states)
+
+
+@pytest.mark.asyncio
+async def test_llm_call_event_references_a_full_untruncated_payload_file(session, scripted_provider):
+    """logs-*.jsonl only keeps a truncated preview of system_prompt/
+    user_prompt/response — the orchestrator must also persist the full copy
+    to its own file and record where, so nothing is unrecoverable once the
+    process exits."""
+    write_json(session.seed_file, {"raw_requirement": "Build a recruitment site."})
+    orchestrator = Orchestrator(session, scripted_provider)
+
+    await orchestrator.run_all(only="clarification")
+
+    llm_call_events = [e for e in read_events(session) if e["event"] == "stage_attempt_llm_call"]
+    assert len(llm_call_events) == 1
+    event = llm_call_events[0]
+
+    assert event["payload_path"] == f"payloads/{orchestrator.run_id}/clarification-attempt1.json"
+    payload_file = session.logs_dir / event["payload_path"]
+    assert payload_file.exists()
+
+    payload = json.loads(payload_file.read_text(encoding="utf-8"))
+    # the full copy matches what actually went into the truncated preview,
+    # just without the "...[truncated, N chars total]" cutoff
+    assert payload["user_prompt"] == event["user_prompt"]
+    assert payload["response"] == event["response"]
 
 
 @pytest.mark.asyncio

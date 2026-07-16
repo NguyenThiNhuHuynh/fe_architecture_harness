@@ -37,7 +37,7 @@ def get_logger(name: str = "frontforge") -> logging.Logger:
 
 
 class EventLogger:
-    """One JSON object per line in .harness/logs/events-<run_id>.jsonl — for
+    """One JSON object per line in .harness/logs/logs-<run_id>.jsonl — for
     machine reading (dashboards, `jq`, scripts) alongside the human-readable
     text log. Every stage completion (success or failure) is recorded here
     with duration_ms/cost_usd so cost/perf can be reconstructed after the
@@ -51,7 +51,9 @@ class EventLogger:
     """
 
     def __init__(self, logs_dir: Path, run_id: str):
-        self.path = logs_dir / f"events-{run_id}.jsonl"
+        self.run_id = run_id
+        self.path = logs_dir / f"logs-{run_id}.jsonl"
+        self.payloads_dir = logs_dir / "payloads" / run_id
         logs_dir.mkdir(parents=True, exist_ok=True)
 
     def log(self, event: str, **fields: Any) -> None:
@@ -66,3 +68,28 @@ class EventLogger:
         record.update(fields)
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, default=str) + "\n")
+
+    def write_payload(
+        self, stage_id: str, attempt: int, *, system_prompt: str, user_prompt: str, response: str
+    ) -> str:
+        """Persists the FULL, untruncated system_prompt/user_prompt/response
+        for one LLM call to its own file, and returns its path (relative to
+        `logs_dir`) so the caller can stash it as a `payload_path` field
+        alongside the truncated preview `log()` already writes into
+        events-<run_id>.jsonl. Fixes the truncated preview's real failure
+        mode: every prompt template puts the actual instruction and any
+        retry `verification_errors` at the END, which a flat character cap
+        cuts off first — the full copy here is never truncated, so nothing
+        is ever unrecoverable after the process exits.
+        """
+        self.payloads_dir.mkdir(parents=True, exist_ok=True)
+        file_name = f"{stage_id}-attempt{attempt}.json"
+        (self.payloads_dir / file_name).write_text(
+            json.dumps(
+                {"system_prompt": system_prompt, "user_prompt": user_prompt, "response": response},
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return f"payloads/{self.run_id}/{file_name}"

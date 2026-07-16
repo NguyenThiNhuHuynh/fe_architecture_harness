@@ -208,6 +208,7 @@ class Orchestrator:
                     model=model,
                     verification_errors=verification_errors or None,
                     on_batch_cost=_on_batch_cost,
+                    session=self.session,
                 )
             except PipelineBudgetExceededError as exc:
                 total_cost_usd += attempt_batch_cost
@@ -286,6 +287,18 @@ class Orchestrator:
             # Captures what was actually sent/received for this attempt —
             # tracing needs this even when verification later fails, so it's
             # logged unconditionally rather than only on the final outcome.
+            # The full copy goes to its own file first (write_payload) since
+            # the truncated preview below keeps only the first
+            # _EVENT_TEXT_TRUNCATE chars — every prompt template puts the
+            # actual instruction/retry feedback at the END, which a
+            # head-only cap would silently drop.
+            payload_path = self.events.write_payload(
+                stage_id,
+                attempt + 1,
+                system_prompt=agent_result.system_prompt,
+                user_prompt=agent_result.user_prompt,
+                response=agent_result.provider_result.raw_text,
+            )
             self.events.log(
                 "stage_attempt_llm_call",
                 stage_id=stage_id,
@@ -296,6 +309,7 @@ class Orchestrator:
                 system_prompt=_truncate(agent_result.system_prompt),
                 user_prompt=_truncate(agent_result.user_prompt),
                 response=_truncate(agent_result.provider_result.raw_text),
+                payload_path=payload_path,
             )
             llm_call_attributes: dict[str, Any] = {
                 "gen_ai.system": _GEN_AI_SYSTEM,

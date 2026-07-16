@@ -1,7 +1,7 @@
-"""Cross-run aggregation over events-*.jsonl.
+"""Cross-run aggregation over logs-*.jsonl.
 
 Every run already writes duration_ms/cost_usd/pass-fail per stage attempt to
-its own events-<run_id>.jsonl (see core/logger.EventLogger). This module is
+its own logs-<run_id>.jsonl (see core/logger.EventLogger). This module is
 the only place that folds *all* of a project's run logs together so
 questions like "what's this stage's p95 duration across every run" can be
 answered without re-running anything.
@@ -48,7 +48,7 @@ class StageStats:
 
 def read_all_events(logs_dir: Path) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
-    for events_file in sorted(logs_dir.glob("events-*.jsonl")):
+    for events_file in sorted(logs_dir.glob("logs-*.jsonl")):
         for line in events_file.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 events.append(json.loads(line))

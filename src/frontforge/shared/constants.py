@@ -6,6 +6,7 @@ OUTPUTS_DIR_NAME = "outputs"
 LOGS_DIR_NAME = "logs"
 GENERATED_DIR_NAME = "generated"
 SEED_FILE_NAME = "seed.json"
+FIGMA_ASSETS_DIR_NAME = "figma_assets"
 
 STAGE_ORDER: list[str] = [
     "clarification",

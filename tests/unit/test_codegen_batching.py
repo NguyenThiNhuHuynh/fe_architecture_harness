@@ -116,7 +116,9 @@ class _TokenReportingProvider(Provider):
         self.per_call_tokens = per_call_tokens
         self.calls: list[dict] = []
 
-    async def generate(self, *, system_prompt, user_prompt, json_schema=None, model=None, timeout=None):
+    async def generate(
+        self, *, system_prompt, user_prompt, json_schema=None, model=None, timeout=None, images=None
+    ):
         index = len(self.calls)
         self.calls.append({"system_prompt": system_prompt, "user_prompt": user_prompt})
         input_tokens, output_tokens = self.per_call_tokens[index]

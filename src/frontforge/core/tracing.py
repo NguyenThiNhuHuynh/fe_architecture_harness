@@ -42,7 +42,7 @@ def configure_tracing(logs_dir: Path, run_id: str) -> None:
     provider = TracerProvider(resource=_resource(run_id))
 
     logs_dir.mkdir(parents=True, exist_ok=True)
-    out = (logs_dir / f"otel-{run_id}.log").open("a", encoding="utf-8")
+    out = (logs_dir / f"traces-{run_id}.log").open("a", encoding="utf-8")
     provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter(out=out)))
 
     trace.set_tracer_provider(provider)
@@ -68,7 +68,7 @@ def configure_metrics(logs_dir: Path, run_id: str, export_interval_millis: int =
     _metrics_configured = True
 
     logs_dir.mkdir(parents=True, exist_ok=True)
-    out = (logs_dir / f"otel-metrics-{run_id}.log").open("a", encoding="utf-8")
+    out = (logs_dir / f"metrics-{run_id}.log").open("a", encoding="utf-8")
     reader = PeriodicExportingMetricReader(
         ConsoleMetricExporter(out=out), export_interval_millis=export_interval_millis
     )

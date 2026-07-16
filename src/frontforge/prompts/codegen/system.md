@@ -32,6 +32,19 @@ sign that something went wrong. When you're given a batch scope:
   this batch's own component list, it wasn't planned as shared; implement
   a small local one instead of assuming it'll appear later.
 
+# Reference screenshots
+
+Some pages may have a Figma screenshot attached to this message as a visual
+reference (the page's plan will note which frame it corresponds to). When
+one is attached for a page you're building:
+- Match its layout, structure, spacing and visual hierarchy as closely as
+  the chosen framework/component library reasonably allows.
+- Still use `design_system`'s color/typography tokens for exact values
+  rather than guessing colors/fonts off the image — the screenshot is a
+  layout reference, the design system is the source of truth for tokens.
+- A page with no screenshot attached has none available; build it from its
+  PageSpec/ComponentPlan as usual, same as before this feature existed.
+
 # Rules
 
 - Return every file needed for the project to build: components, pages,

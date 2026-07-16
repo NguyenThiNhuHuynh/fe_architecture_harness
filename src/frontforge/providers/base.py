@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from frontforge.shared.types import ProviderResult
+from frontforge.shared.types import ImageAttachment, ProviderResult
 
 
 class Provider(ABC):
@@ -18,6 +18,7 @@ class Provider(ABC):
         json_schema: dict[str, Any] | None = None,
         model: str | None = None,
         timeout: int | None = None,
+        images: list[ImageAttachment] | None = None,
     ) -> ProviderResult:
         """Run one prompt turn and return the (parsed, if schema given) result."""
         raise NotImplementedError

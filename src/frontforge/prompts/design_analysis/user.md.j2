@@ -11,6 +11,13 @@
 
 {{ seed.figma_design_data.components | pretty_json }}
 
+{% if not seed.figma_design_data.styles and not seed.figma_design_data.components %}
+No published styles or components were found in this file. If reference
+screenshots are attached to this message, visually infer color_tokens,
+typography, and components from them instead of leaving those lists empty
+(mark each such entry `inferred: true` per the rules above). If no
+screenshots are attached either, leave those lists empty as usual.
+{% endif %}
 Interpret the above into a DesignAnalysisResult with source="figma".
 {% else %}
 No Figma source was provided for this project. Return a DesignAnalysisResult
